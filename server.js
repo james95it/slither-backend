@@ -6,13 +6,12 @@ const { WebSocketServer } = require('ws');
 const wss = new WebSocketServer({ server });
 let players = {};
 let foods = [];
-const MAP_SIZE = 3500; // 🚀 MỞ RỘNG BẢN ĐỒ GẤP ĐÔI
+const MAP_SIZE = 3500;
 const colors = ["#ff4757","#2ed573","#1e90ff","#ffa502","#9b59b6","#00d2d3","#ff9ff3"];
 
 function spawnFood(x, y, r, c) {
     return { id: Math.random(), x: x || Math.random() * MAP_SIZE, y: y || Math.random() * MAP_SIZE, r: r || Math.random() * 3 + 3, c: c || colors[Math.floor(Math.random() * colors.length)], targetX: null, targetY: null };
 }
-// Tăng số lượng mồi lên 300 hạt cho bản đồ rộng
 for(let i=0; i<300; i++) foods.push(spawnFood());
 
 wss.on('connection', (ws) => {
@@ -36,38 +35,49 @@ wss.on('connection', (ws) => {
                 let p = players[ws.id];
                 if (!p || !p.isAlive) return;
                 p.a = data.a;
-                p.isBoosting = data.isBoost && p.sc > 0;
+                
+                // Điều kiện tăng tốc: Phải dài hơn độ dài tối thiểu (25 đốt) thì mới cho bứt tốc
+                p.isBoosting = data.isBoost && p.len > 25;
                 
                 let speed = p.isBoosting ? 5.2 : 2.6;
-                if (p.isBoosting) { p.sc -= 0.05; p.len = 25 + p.sc * 3.5; }
+                
+                if (p.isBoosting) {
+                    p.sc -= 0.05; // Giảm điểm số
+                    
+                    // 🚀 CƠ CHẾ CO NGẮN THÂN THỜI GIAN THỰC
+                    // Cứ mỗi khung hình tăng tốc, giảm độ dài thân đi 0.15 khớp nối
+                    p.len -= 0.15; 
+                    
+                    // Cơ chế nhả mồi: Cứ khi thân bị cắt ngắn đi, sinh ra 1 hạt mồi nhỏ ngay tại đuôi rắn
+                    if (Math.random() < 0.15 && p.body.length > 0) {
+                        let tail = p.body[p.body.length - 1];
+                        foods.push(spawnFood(tail.x + (Math.random()*10-5), tail.y + (Math.random()*10-5), 3.5, p.c));
+                    }
+                }
 
                 let nextX = p.x + Math.cos(p.a) * speed;
                 let nextY = p.y + Math.sin(p.a) * speed;
                 
-                // Khóa biên bản đồ uốn lượn mượt mà
                 if (nextX >= 0 && nextX <= MAP_SIZE) p.x = nextX;
                 if (nextY >= 0 && nextY <= MAP_SIZE) p.y = nextY;
 
                 p.body.unshift({ x: p.x, y: p.y });
-                if (p.body.length > p.len) p.body.pop();
+                
+                // Ép mảng đốt thân phải cắt tỉa ngay lập tức theo độ dài p.len mới
+                while (p.body.length > Math.floor(p.len)) {
+                    p.body.pop();
+                }
 
-                // Logic Server: Kiểm tra phạm vi hút mồi và ăn mồi
+                // Kiểm tra hút mồi và ngoạm mồi
                 foods.forEach((f, idx) => {
                     let dist = Math.sqrt((p.x - f.x)**2 + (p.y - f.y)**2);
-                    
-                    // Tính năng hút mồi động lực học (Khoảng cách < 70px)
                     if (dist < 70) {
-                        f.targetX = p.x;
-                        f.targetY = p.y;
-                        // Di chuyển hạt mồi trượt dần về phía đầu rắn
-                        f.x += (p.x - f.x) * 0.25;
-                        f.y += (p.y - f.y) * 0.25;
+                        f.targetX = p.x; f.targetY = p.y;
+                        f.x += (p.x - f.x) * 0.25; f.y += (p.y - f.y) * 0.25;
                     }
-
-                    // Thực tế va chạm ngoạm mồi
                     if (dist < p.r + f.r) {
                         p.sc += (f.r > 5) ? 3.0 : 1; 
-                        p.len += (f.r > 5) ? 9 : 4;
+                        p.len += (f.r > 5) ? 9 : 3.5; // Ăn mồi giúp tăng lại độ dài khớp nối
                         foods[idx] = spawnFood();
                     }
                 });
@@ -78,6 +88,7 @@ wss.on('connection', (ws) => {
     ws.on('close', () => { delete players[ws.id]; });
 });
 
+// Vòng lặp check va chạm đâm nhau chết công khai (60fps)
 setInterval(() => {
     let activeIds = Object.keys(players).filter(id => players[id].isAlive);
     let deadIds = [];
